@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+*.log
+flight_replay.html
+# Keep the committed dataset + model (data/dataset.npz, data/surrogate.joblib);
+# ignore any scratch experiments.
+data/scratch_*

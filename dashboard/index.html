@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kronos — Live Landing Zone</title>
+<style>
+  :root{
+    --bg:#06080c; --panel:#0b0f15; --panel2:#0e141c; --line:#1a2430; --line2:#243040;
+    --ink:#eaf1f8; --dim:#93a6ba; --mute:#5c7086;
+    --cyan:#2fd0ee; --amber:#ffa142; --rose:#ff4d6d; --green:#3ddc84;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased}
+  #app{display:grid;grid-template-columns:1fr 372px;height:100vh}
+  @media (max-width:900px){#app{grid-template-columns:1fr;grid-template-rows:1fr auto}}
+  #mapwrap{position:relative;overflow:hidden;background:var(--bg)}
+  canvas{display:block;width:100%;height:100%}
+
+  /* ---- right rail ---- */
+  #rail{background:var(--panel);border-left:1px solid var(--line);display:flex;
+    flex-direction:column;overflow-y:auto}
+  .brandbar{display:flex;align-items:baseline;justify-content:space-between;
+    padding:14px 18px 12px;border-bottom:1px solid var(--line)}
+  .brand{font-size:12px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--ink)}
+  .brandsub{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+
+  .lbl{font-size:9.5px;letter-spacing:.17em;text-transform:uppercase;color:var(--mute)}
+
+  /* ---- hero: the drive instruction ---- */
+  .hero{padding:16px 18px 18px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(255,77,109,.07),transparent 70%)}
+  .herotop{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .herobody{display:flex;align-items:center;gap:16px}
+  .rose{flex:0 0 100px;height:100px;position:relative}
+  .heronums{flex:1;min-width:0}
+  .brg{font-family:var(--mono);font-size:50px;line-height:.92;font-weight:600;
+    letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .brg .deg{font-size:24px;color:var(--dim);font-weight:400;font-style:normal}
+  .dist{font-family:var(--mono);font-size:28px;line-height:1.15;margin-top:7px;
+    font-variant-numeric:tabular-nums;color:var(--rose);font-weight:600}
+  .dist .u{font-size:14px;color:var(--mute);font-weight:400;font-style:normal}
+
+  /* ---- coordinates ---- */
+  .coord{padding:13px 18px;border-bottom:1px solid var(--line)}
+  .coordval{font-family:var(--mono);font-size:17px;margin-top:5px;color:var(--ink);
+    font-variant-numeric:tabular-nums;letter-spacing:.01em;user-select:all}
+
+  /* ---- stat strip ---- */
+  .strip{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}
+  .st{padding:11px 14px;border-right:1px solid var(--line)}
+  .st:last-child{border-right:0}
+  .stv{font-family:var(--mono);font-size:21px;margin-top:4px;font-variant-numeric:tabular-nums;
+    font-weight:600;letter-spacing:-.01em}
+  .stv u{text-decoration:none;font-size:11px;color:var(--mute);font-weight:400}
+
+  /* ---- phase rail ---- */
+  .phases{display:flex;gap:0;padding:0;border-bottom:1px solid var(--line)}
+  .ph{flex:1;padding:9px 4px 8px;text-align:center;font-size:9.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--mute);border-right:1px solid var(--line);
+    border-top:2px solid transparent;transition:color .3s,border-color .3s,background .3s}
+  .ph:last-child{border-right:0}
+  .ph.done{color:var(--dim);border-top-color:var(--line2)}
+  .ph.now{color:var(--ink);font-weight:700;background:rgba(255,255,255,.035)}
+  .ph.now.asc{border-top-color:var(--cyan)}
+  .ph.now.desc{border-top-color:var(--amber)}
+
+  #profile{width:100%;height:104px;display:block;border-bottom:1px solid var(--line)}
+  #converge{width:100%;height:96px;display:block;margin-top:2px}
+
+  /* ---- meters ---- */
+  .meters{padding:14px 18px 6px}
+  .mrow{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .mval{font-family:var(--mono);font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .track{height:5px;border-radius:3px;background:#141d27;overflow:hidden;margin-bottom:14px}
+  .track > i{display:block;height:100%;border-radius:3px;transition:width .4s ease}
+  .fill-conf{background:linear-gradient(90deg,var(--green),var(--cyan))}
+  .fill-err{background:var(--green)}
+
+  .foot{padding:0 18px 16px;color:var(--mute);font-size:10.5px;line-height:1.55}
+  .legend{display:flex;gap:13px;flex-wrap:wrap;padding:14px 18px 10px;color:var(--mute);
+    font-size:10px;margin-top:auto;border-top:1px solid var(--line)}
+  .legend b{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:0}
+
+  /* ---- map overlays ---- */
+  #hud{position:absolute;top:14px;left:16px;display:flex;align-items:center;gap:9px;
+    font-family:var(--mono);font-size:11px;color:var(--dim);
+    background:rgba(6,8,12,.74);border:1px solid var(--line);border-radius:6px;padding:6px 11px;
+    backdrop-filter:blur(6px)}
+  #dotlive{width:7px;height:7px;border-radius:50%;background:var(--mute)}
+  #dotlive.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  #dotlive.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+  #scalebox{position:absolute;left:16px;bottom:16px;font-family:var(--mono);font-size:10.5px;
+    color:var(--mute);letter-spacing:.04em}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="mapwrap">
+    <canvas id="map"></canvas>
+    <div id="hud"><i id="dotlive"></i><span id="link">standby</span><span style="color:var(--line2)">│</span><span id="pkt">000</span></div>
+    <div id="scalebox"></div>
+  </div>
+
+  <div id="rail">
+    <div class="brandbar">
+      <div class="brand">Kronos Recovery</div>
+      <div class="brandsub" id="phasetag">standby</div>
+    </div>
+
+    <!-- HERO: what the recovery crew actually needs -->
+    <div class="hero">
+      <div class="herotop">
+        <div class="lbl">Recovery vector · from pad</div>
+        <div class="lbl" id="etalbl">—</div>
+      </div>
+      <div class="herobody">
+        <div class="rose"><canvas id="rose" style="width:100px;height:100px"></canvas></div>
+        <div class="heronums">
+          <div class="brg"><span id="brg">—</span><i class="deg">°</i></div>
+          <div class="dist"><span id="dist">—</span><i class="u" id="distu"> m</i></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="coord">
+      <div class="lbl">Predicted landing coordinates</div>
+      <div class="coordval" id="coord">— , —</div>
+    </div>
+
+    <div class="strip">
+      <div class="st"><div class="lbl">Zone 68%</div><div class="stv"><span id="unc">—</span><u> m</u></div></div>
+      <div class="st"><div class="lbl">Touchdown</div><div class="stv"><span id="eta">—</span><u> s</u></div></div>
+      <div class="st"><div class="lbl">Wind</div><div class="stv"><span id="wind">—</span><u> m/s</u></div></div>
+    </div>
+
+    <div class="phases" id="phases">
+      <div class="ph" data-phase="boost">boost</div>
+      <div class="ph" data-phase="coast">coast</div>
+      <div class="ph" data-phase="drogue">drogue</div>
+      <div class="ph" data-phase="main">main</div>
+    </div>
+
+    <canvas id="profile"></canvas>
+
+    <div class="meters">
+      <div class="mrow"><span class="lbl">Confidence</span><span class="mval" id="confv">—</span></div>
+      <div class="track"><i class="fill-conf" id="conf" style="width:0%"></i></div>
+      <div id="errbox" style="display:none">
+        <div class="mrow"><span class="lbl">Error vs true landing</span><span class="mval" id="errv">—</span></div>
+        <div class="track"><i class="fill-err" id="err" style="width:0%"></i></div>
+      </div>
+      <div class="mrow" style="margin-top:4px">
+        <span class="lbl">Zone convergence</span><span class="mval" id="convv">—</span>
+      </div>
+    </div>
+    <canvas id="converge"></canvas>
+
+    <div class="legend">
+      <span><b style="background:var(--cyan)"></b>ascent</span>
+      <span><b style="background:var(--amber)"></b>descent</span>
+      <span><b style="background:var(--rose)"></b>landing zone</span>
+      <span><b style="background:var(--green)"></b>true LZ</span>
+    </div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+<script>
+/* ============================================================================
+   Kronos live landing-zone dashboard.
+   Fully self-contained (no external tiles/libraries/fonts) so it runs on the
+   ground station at White Cliffs with zero internet.
+
+   Designed as a recovery instrument, not a telemetry screen: the hero read-out
+   is the drive instruction from the pad (bearing + distance), because the crew
+   reading it is standing at the pad. Vehicle telemetry lives on the ARD
+   dashboard; the altitude profile here only gives the plan-view map its missing
+   vertical context.
+
+   Data source: window.EMBEDDED_FLIGHT (baked replay) if present, otherwise an
+   EventSource("/events") stream from the live predictor server.
+   ========================================================================== */
+(function(){
+  const cv=document.getElementById('map'), ctx=cv.getContext('2d');
+  const pv=document.getElementById('profile'), pctx=pv.getContext('2d');
+  const rv=document.getElementById('rose'), rctx=rv.getContext('2d');
+  const gv=document.getElementById('converge'), gctx=gv.getContext('2d');
+  const $=id=>document.getElementById(id);
+  const C=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  /* Single source of truth for canvas colours. The CSS :root block above
+     mirrors these for the DOM; change both together when restyling. */
+  const P={
+    ascent:[47,208,238], descent:[255,161,66], lz:[255,77,109], truth:[61,220,132],
+    ink:[234,241,248],
+    bg:'#06080c', chartBg:'#0e141c',
+    grid:'#131c26', gridStrong:'#22303f',
+    labelDim:'#3d5063', labelMid:'#7b8fa3', inkSoft:'#c3d3e2',
+    lzLabel:'#ff8095', truthLabel:'#7fe8ab'
+  };
+  const rgba=(c,a)=>'rgba('+c[0]+','+c[1]+','+c[2]+','+a+')';
+  const ROSE=100;                       // compass rose size, CSS px
+  const track=[], rawPts=[];
+  let pred=null, truth=null, apogee=0, landed=false, gotFirst=false;
+  const cam={cx:0,cy:0,scale:0,init:false};
+
+  function resize(){
+    const dpr=window.devicePixelRatio||1;
+    const r=cv.parentElement.getBoundingClientRect();
+    cv.width=r.width*dpr; cv.height=r.height*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+    const pr=pv.getBoundingClientRect();
+    pv.width=pr.width*dpr; pv.height=pr.height*dpr; pctx.setTransform(dpr,0,0,dpr,0,0);
+    rv.width=ROSE*dpr; rv.height=ROSE*dpr; rctx.setTransform(dpr,0,0,dpr,0,0);
+    const gr=gv.getBoundingClientRect();
+    gv.width=gr.width*dpr; gv.height=gr.height*dpr; gctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize',resize);
+
+  /* ---------- geometry helpers ---------- */
+  const hypot=Math.hypot;
+  function bearingFromPad(){ return pred? (Math.atan2(pred.land_e,pred.land_n)*180/Math.PI+360)%360 : null; }
+
+  function targetView(W,H){
+    let xs=[0], ys=[0];
+    for(const p of track){ xs.push(p.e); ys.push(p.n); }
+    if(pred){ const r2=pred.uncertainty_m*2;
+      xs.push(pred.land_e-r2,pred.land_e+r2); ys.push(pred.land_n-r2,pred.land_n+r2); }
+    if(truth){ xs.push(truth.e); ys.push(truth.n); }
+    let minx=Math.min(...xs)-150,maxx=Math.max(...xs)+150;
+    let miny=Math.min(...ys)-150,maxy=Math.max(...ys)+150;
+    const w=Math.max(maxx-minx,250),h=Math.max(maxy-miny,250);
+    return {cx:(minx+maxx)/2, cy:(miny+maxy)/2, scale:0.9*Math.min(W/w,H/h)};
+  }
+
+  /* ---------- main map ---------- */
+  function draw(now){
+    const W=cv.clientWidth,H=cv.clientHeight; if(!W||!H) return;
+    const t=targetView(W,H);
+    if(!cam.init) Object.assign(cam,t,{init:true});
+    else{ const a=0.11; cam.cx+=(t.cx-cam.cx)*a; cam.cy+=(t.cy-cam.cy)*a; cam.scale+=(t.scale-cam.scale)*a; }
+    const s=cam.scale, toX=e=>W/2+(e-cam.cx)*s, toY=n=>H/2-(n-cam.cy)*s;
+
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle=P.bg; ctx.fillRect(0,0,W,H);
+    ctx.font='10px '+C('--mono');
+
+    // survey rings from the pad, labelled along a consistent NE radial
+    const nice=[100,250,500,1000,2000,5000];
+    let step=nice[nice.length-1];
+    for(const v of nice) if(v*s>=95){ step=v; break; }
+    const px=toX(0), py=toY(0);
+    const maxR=Math.max(hypot(px,py),hypot(W-px,py),hypot(px,H-py),hypot(W-px,H-py))/s;
+    for(let r=step;r<=maxR+step;r+=step){
+      ctx.strokeStyle=P.grid; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(px,py,r*s,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle=P.labelDim;
+      ctx.fillText(r>=1000?(r/1000)+' km':r+' m', px+r*s*0.707+5, py-r*s*0.707-5);
+    }
+    // compass ticks at the pad
+    ctx.strokeStyle=P.gridStrong; ctx.lineWidth=1;
+    for(let a=0;a<360;a+=45){
+      const rad=a*Math.PI/180, i=13, o=a%90===0?24:19;
+      ctx.beginPath();
+      ctx.moveTo(px+Math.sin(rad)*i, py-Math.cos(rad)*i);
+      ctx.lineTo(px+Math.sin(rad)*o, py-Math.cos(rad)*o);
+      ctx.stroke();
+    }
+    ctx.fillStyle=P.labelDim; ctx.textAlign='center';
+    ctx.fillText('N',px,py-30); ctx.textAlign='start';
+    ctx.beginPath(); ctx.arc(px,py,3.5,0,Math.PI*2); ctx.fillStyle=P.inkSoft; ctx.fill();
+    ctx.fillStyle=P.labelMid; ctx.fillText('PAD',px+9,py+13);
+
+    // flight path with a soft glow
+    if(track.length>1){
+      ctx.lineWidth=5; ctx.lineCap='round'; ctx.lineJoin='round';
+      for(let i=1;i<track.length;i++){
+        const a=track[i-1],c=track[i];
+        ctx.strokeStyle = c.phase>=2 ? rgba(P.descent,.10) : rgba(P.ascent,.10);
+        ctx.beginPath(); ctx.moveTo(toX(a.e),toY(a.n)); ctx.lineTo(toX(c.e),toY(c.n)); ctx.stroke();
+      }
+      ctx.lineWidth=1.9;
+      for(let i=1;i<track.length;i++){
+        const a=track[i-1],c=track[i];
+        ctx.strokeStyle = c.phase>=2 ? rgba(P.descent,.95) : rgba(P.ascent,.95);
+        ctx.beginPath(); ctx.moveTo(toX(a.e),toY(a.n)); ctx.lineTo(toX(c.e),toY(c.n)); ctx.stroke();
+      }
+    }
+    let cur=null;
+    if(track.length){
+      cur=track[track.length-1];
+      const col=cur.phase>=2?rgba(P.descent,1):rgba(P.ascent,1);
+      ctx.beginPath(); ctx.arc(toX(cur.e),toY(cur.n),9,0,Math.PI*2);
+      ctx.fillStyle=cur.phase>=2?rgba(P.descent,.16):rgba(P.ascent,.16); ctx.fill();
+      ctx.beginPath(); ctx.arc(toX(cur.e),toY(cur.n),4,0,Math.PI*2);
+      ctx.fillStyle=col; ctx.fill();
+    }
+
+    // ---- landing zone: reticle + calibrated rings ----
+    if(pred){
+      const lx=toX(pred.land_e), ly=toY(pred.land_n);
+      const r1=Math.max(7,pred.uncertainty_m*s), r2=r1*2;
+      if(cur && !landed){
+        ctx.strokeStyle=rgba(P.lz,.22); ctx.setLineDash([3,5]); ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(toX(cur.e),toY(cur.n)); ctx.lineTo(lx,ly); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // 95%
+      ctx.beginPath(); ctx.arc(lx,ly,r2,0,Math.PI*2);
+      ctx.fillStyle=rgba(P.lz,.04); ctx.fill();
+      ctx.strokeStyle=rgba(P.lz,.22); ctx.setLineDash([2,6]); ctx.lineWidth=1; ctx.stroke();
+      ctx.setLineDash([]);
+      // 68%
+      ctx.beginPath(); ctx.arc(lx,ly,r1,0,Math.PI*2);
+      ctx.fillStyle=rgba(P.lz,.13); ctx.fill();
+      ctx.strokeStyle=rgba(P.lz,.85); ctx.setLineDash([6,4]); ctx.lineWidth=1.5; ctx.stroke();
+      ctx.setLineDash([]);
+      // live pulse (settles once landed)
+      if(!landed){
+        const ph=(now%2400)/2400, pr=r1*(1+ph*1.5);
+        ctx.beginPath(); ctx.arc(lx,ly,pr,0,Math.PI*2);
+        ctx.strokeStyle=rgba(P.lz,0.35*(1-ph)); ctx.lineWidth=1.5; ctx.stroke();
+      }
+      // camera-style reticle
+      ctx.strokeStyle=rgba(P.lz,1); ctx.lineWidth=1.6;
+      const g=5,arm=11;
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dx,dy])=>{
+        ctx.beginPath(); ctx.moveTo(lx+dx*g,ly+dy*g); ctx.lineTo(lx+dx*(g+arm),ly+dy*(g+arm)); ctx.stroke();
+      });
+      ctx.beginPath(); ctx.arc(lx,ly,2.2,0,Math.PI*2); ctx.fillStyle=rgba(P.lz,1); ctx.fill();
+      ctx.fillStyle=P.lzLabel; ctx.textAlign='center';
+      ctx.fillText('LANDING ZONE  ·  ±'+Math.round(pred.uncertainty_m)+' m', lx, ly-r1-13);
+      ctx.textAlign='start';
+      if(pred.wind_e!==undefined) windArrow(lx,ly,pred.wind_e,pred.wind_n);
+    }
+    if(truth){
+      const tx=toX(truth.e),ty=toY(truth.n);
+      ctx.strokeStyle=rgba(P.truth,1); ctx.lineWidth=1.6;
+      ctx.beginPath(); ctx.moveTo(tx-7,ty); ctx.lineTo(tx+7,ty);
+      ctx.moveTo(tx,ty-7); ctx.lineTo(tx,ty+7); ctx.stroke();
+      ctx.fillStyle=P.truthLabel; ctx.fillText('true LZ',tx+10,ty+15);
+    }
+    // scale bar
+    const tgt=W*0.18/s; let m=nice[0]; for(const v of nice) if(v<=tgt) m=v;
+    ctx.strokeStyle=P.labelDim; ctx.lineWidth=1.5;
+    const bx=16,by=H-34;
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx+m*s,by);
+    ctx.moveTo(bx,by-4); ctx.lineTo(bx,by+4);
+    ctx.moveTo(bx+m*s,by-4); ctx.lineTo(bx+m*s,by+4); ctx.stroke();
+    $('scalebox').textContent = m>=1000?(m/1000)+' km':m+' m';
+  }
+
+  function windArrow(x,y,we,wn){
+    const sp=hypot(we,wn); if(sp<0.2) return;
+    const len=Math.min(38,12+sp*3), ux=we/sp, uy=-wn/sp;
+    const ex=x+ux*len, ey=y+uy*len;
+    ctx.strokeStyle=rgba(P.ascent,.55); ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(ex,ey); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex,ey,2.4,0,Math.PI*2); ctx.fillStyle=rgba(P.ascent,.8); ctx.fill();
+  }
+
+  /* ---------- compass rose (hero) ---------- */
+  function drawRose(){
+    const S=ROSE, c=S/2;
+    rctx.clearRect(0,0,S,S);
+    rctx.strokeStyle=P.grid; rctx.lineWidth=1;
+    rctx.beginPath(); rctx.arc(c,c,c-2,0,Math.PI*2); rctx.stroke();
+    rctx.strokeStyle=P.grid;
+    rctx.beginPath(); rctx.arc(c,c,c-13,0,Math.PI*2); rctx.stroke();
+    rctx.font='8px '+C('--mono'); rctx.fillStyle=P.labelDim; rctx.textAlign='center';
+    rctx.fillText('N',c,10); rctx.fillText('S',c,S-3);
+    rctx.fillText('E',S-6,c+3); rctx.fillText('W',6,c+3);
+    for(let a=0;a<360;a+=30){
+      const r=a*Math.PI/180;
+      rctx.strokeStyle=P.grid; rctx.lineWidth=1;
+      rctx.beginPath();
+      rctx.moveTo(c+Math.sin(r)*(c-13), c-Math.cos(r)*(c-13));
+      rctx.lineTo(c+Math.sin(r)*(c-9), c-Math.cos(r)*(c-9));
+      rctx.stroke();
+    }
+    const b=bearingFromPad();
+    if(b===null){ rctx.textAlign='start'; return; }
+    const r=b*Math.PI/180, L=c-17;
+    const tipx=c+Math.sin(r)*L, tipy=c-Math.cos(r)*L;
+    rctx.strokeStyle=rgba(P.lz,.45); rctx.lineWidth=2;
+    rctx.beginPath(); rctx.moveTo(c,c); rctx.lineTo(tipx,tipy); rctx.stroke();
+    const hw=0.30;
+    rctx.beginPath();
+    rctx.moveTo(tipx,tipy);
+    rctx.lineTo(c+Math.sin(r-hw)*(L-13), c-Math.cos(r-hw)*(L-13));
+    rctx.lineTo(c+Math.sin(r+hw)*(L-13), c-Math.cos(r+hw)*(L-13));
+    rctx.closePath(); rctx.fillStyle=rgba(P.lz,1); rctx.fill();
+    rctx.beginPath(); rctx.arc(c,c,2.5,0,Math.PI*2); rctx.fillStyle=P.labelMid; rctx.fill();
+    rctx.textAlign='start';
+  }
+
+  /* ---------- altitude profile ---------- */
+  function drawProfile(){
+    const W=pv.clientWidth,H=pv.clientHeight;
+    pctx.clearRect(0,0,W,H);
+    pctx.fillStyle=P.chartBg; pctx.fillRect(0,0,W,H);
+    pctx.font='9px '+C('--mono');
+    if(track.length<2){
+      pctx.fillStyle=P.labelDim; pctx.fillText('ALTITUDE PROFILE',14,H/2+3); return;
+    }
+    const L=14,R=14,T=20,B=16;
+    const tMax=Math.max(track[track.length-1].t,10), aMax=Math.max(apogee,100);
+    const px=t=>L+(W-L-R)*t/tMax, py=a=>H-B-(H-T-B)*a/aMax;
+    pctx.strokeStyle=P.grid; pctx.lineWidth=1;
+    pctx.beginPath(); pctx.moveTo(L,py(0)); pctx.lineTo(W-R,py(0)); pctx.stroke();
+    // area fill
+    const grad=pctx.createLinearGradient(0,T,0,H-B);
+    grad.addColorStop(0,rgba(P.descent,.16)); grad.addColorStop(1,rgba(P.descent,.01));
+    pctx.beginPath(); pctx.moveTo(px(track[0].t),py(0));
+    for(const p of track) pctx.lineTo(px(p.t),py(p.alt));
+    pctx.lineTo(px(track[track.length-1].t),py(0)); pctx.closePath();
+    pctx.fillStyle=grad; pctx.fill();
+    // line
+    pctx.lineWidth=1.7; pctx.lineCap='round';
+    for(let i=1;i<track.length;i++){
+      const a=track[i-1],c=track[i];
+      pctx.strokeStyle=c.phase>=2?rgba(P.descent,1):rgba(P.ascent,1);
+      pctx.beginPath(); pctx.moveTo(px(a.t),py(a.alt)); pctx.lineTo(px(c.t),py(c.alt)); pctx.stroke();
+    }
+    // apogee
+    let ai=0; for(let i=0;i<track.length;i++) if(track[i].alt>=track[ai].alt) ai=i;
+    const ax=px(track[ai].t), ay=py(track[ai].alt);
+    pctx.strokeStyle=rgba(P.ink,.28);
+    pctx.beginPath(); pctx.moveTo(ax,ay-3); pctx.lineTo(ax,8); pctx.stroke();
+    pctx.fillStyle=P.labelMid; pctx.textAlign='center';
+    pctx.fillText('APOGEE '+Math.round(track[ai].alt)+' m', Math.min(Math.max(ax,52),W-52), 12);
+    pctx.textAlign='start';
+    // deploy ticks
+    for(let i=1;i<track.length;i++){
+      if(track[i].phase!==track[i-1].phase && track[i].phase>=2){
+        const x=px(track[i].t),y=py(track[i].alt);
+        pctx.strokeStyle=rgba(P.descent,.6); pctx.lineWidth=1;
+        pctx.beginPath(); pctx.moveTo(x,y-5); pctx.lineTo(x,y+5); pctx.stroke();
+      }
+    }
+    const c=track[track.length-1];
+    pctx.beginPath(); pctx.arc(px(c.t),py(c.alt),2.8,0,Math.PI*2);
+    pctx.fillStyle=c.phase>=2?rgba(P.descent,1):rgba(P.ascent,1); pctx.fill();
+  }
+
+  /* ---------- zone convergence ----------
+     The product's core claim, drawn: the recovery radius collapsing as the
+     flight progresses. Log scale on y, because the interesting range spans
+     ~1 km down to tens of metres. */
+  function drawConverge(){
+    const W=gv.clientWidth,H=gv.clientHeight;
+    gctx.clearRect(0,0,W,H);
+    gctx.fillStyle=P.chartBg; gctx.fillRect(0,0,W,H);
+    gctx.font='9px '+C('--mono');
+    if(track.length<2){
+      gctx.fillStyle=P.labelDim; gctx.fillText('ZONE CONVERGENCE',14,H/2+3); return;
+    }
+    const L=14,R=14,T=14,B=16;
+    const tMax=Math.max(track[track.length-1].t,10);
+    const lo=Math.log10(20), hi=Math.log10(Math.max(1200,...track.map(p=>p.unc||1)));
+    const px=t=>L+(W-L-R)*t/tMax;
+    const py=u=>{const v=(Math.log10(Math.max(20,u))-lo)/(hi-lo); return H-B-(H-T-B)*v;};
+    // gridlines at 1 km / 100 m
+    [1000,100].forEach(g=>{
+      const y=py(g);
+      gctx.strokeStyle=P.grid; gctx.lineWidth=1;
+      gctx.beginPath(); gctx.moveTo(L,y); gctx.lineTo(W-R,y); gctx.stroke();
+      gctx.fillStyle=P.labelDim;
+      gctx.fillText(g>=1000?(g/1000)+' km':g+' m', W-R-34, y-3);
+    });
+    // area + line
+    gctx.beginPath(); gctx.moveTo(px(track[0].t),H-B);
+    for(const p of track) gctx.lineTo(px(p.t),py(p.unc));
+    gctx.lineTo(px(track[track.length-1].t),H-B); gctx.closePath();
+    const g2=gctx.createLinearGradient(0,T,0,H-B);
+    g2.addColorStop(0,rgba(P.lz,.18)); g2.addColorStop(1,rgba(P.lz,.02));
+    gctx.fillStyle=g2; gctx.fill();
+    gctx.strokeStyle=rgba(P.lz,1); gctx.lineWidth=1.7; gctx.lineCap='round';
+    gctx.beginPath();
+    track.forEach((p,i)=> i?gctx.lineTo(px(p.t),py(p.unc)):gctx.moveTo(px(p.t),py(p.unc)));
+    gctx.stroke();
+    const c=track[track.length-1];
+    gctx.beginPath(); gctx.arc(px(c.t),py(c.unc),2.8,0,Math.PI*2);
+    gctx.fillStyle=rgba(P.lz,1); gctx.fill();
+  }
+
+  /* ---------- data in ---------- */
+  function ingest(p){
+    pred=p;
+    const ce=p.cur_e!==undefined?p.cur_e:0, cn=p.cur_n!==undefined?p.cur_n:0;
+    rawPts.push({e:ce,n:cn}); if(rawPts.length>4) rawPts.shift();
+    track.push({
+      e:rawPts.reduce((s,q)=>s+q.e,0)/rawPts.length,
+      n:rawPts.reduce((s,q)=>s+q.n,0)/rawPts.length,
+      phase:phaseId(p.phase), alt:p.alt_agl, t:p.t, unc:p.uncertainty_m});
+    if(p.alt_agl>apogee) apogee=p.alt_agl;
+    landed=(p.phase==='main'||p.phase==='drogue') && p.alt_agl<8 && p.remaining_time_s<=2;
+    if(!gotFirst){ gotFirst=true;
+      $('foot').textContent='Recovery zone updating live. Vehicle telemetry is on the ARD dashboard.'; }
+    hud(p);
+  }
+  const phaseId=s=>({boost:0,coast:1,drogue:2,main:3}[s]??1);
+
+  function hud(p){
+    const order=['boost','coast','drogue','main'], idx=order.indexOf(p.phase);
+    const asc=idx<2;
+    document.querySelectorAll('#phases .ph').forEach(el=>{
+      const i=order.indexOf(el.dataset.phase);
+      el.className='ph'+(i<idx?' done':'')+(i===idx?' now '+(asc?'asc':'desc'):'');
+    });
+    $('phasetag').textContent=landed?'landed':p.phase;
+    $('phasetag').style.color=landed?rgba(P.truth,1):(asc?rgba(P.ascent,1):rgba(P.descent,1));
+
+    const b=bearingFromPad();
+    $('brg').textContent=b===null?'—':String(Math.round(b)).padStart(3,'0');
+    const d=p.downrange_m;
+    if(d>=1000){ $('dist').textContent=(d/1000).toFixed(2); $('distu').textContent=' km'; }
+    else { $('dist').textContent=Math.round(d); $('distu').textContent=' m'; }
+
+    $('coord').textContent=p.land_lat.toFixed(5)+' , '+p.land_lon.toFixed(5);
+    $('unc').textContent=Math.round(p.uncertainty_m);
+    const eta=landed?0:Math.max(0,p.remaining_time_s);
+    $('eta').textContent=Math.round(eta);
+    $('etalbl').textContent=landed?'on the ground':'T‑minus '+Math.round(eta)+' s';
+    $('wind').textContent=hypot(p.wind_e||0,p.wind_n||0).toFixed(1);
+    $('pkt').textContent=String(Math.round(p.packet_id||0)).padStart(3,'0');
+
+    const conf=Math.max(0,Math.min(100,Math.round((1-(p.uncertainty_m-25)/(300-25))*100)));
+    $('conf').style.width=conf+'%'; $('confv').textContent=conf+'%';
+    const u0=track.length?track[0].unc:null;
+    $('convv').textContent = (u0&&p.uncertainty_m) ?
+      Math.round(u0)+' m → '+Math.round(p.uncertainty_m)+' m  ('+(u0/p.uncertainty_m).toFixed(1)+'× tighter)' : '—';
+    if(truth){
+      const e=haversine(p.land_lat,p.land_lon,truth.lat,truth.lon);
+      $('errbox').style.display='block';
+      $('errv').textContent=Math.round(e)+' m';
+      $('err').style.width=Math.max(2,100-Math.min(100,e/5))+'%';
+    }
+  }
+  function haversine(la1,lo1,la2,lo2){const R=6371000,r=Math.PI/180;
+    const dp=(la2-la1)*r,dl=(lo2-lo1)*r;
+    const a=Math.sin(dp/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dl/2)**2;
+    return 2*R*Math.asin(Math.sqrt(a));}
+
+  function loop(now){ draw(now||0); drawProfile(); drawRose(); drawConverge(); requestAnimationFrame(loop); }
+
+  /* ---------- sources ---------- */
+  function startEmbedded(f){
+    truth=f.truth||null;
+    $('foot').textContent='Replay of a simulated Kronos flight.';
+    $('link').textContent='REPLAY'; $('dotlive').className='on';
+    let i=0; const fr=f.frames;
+    (function step(){ if(i>=fr.length) return; ingest(fr[i++]);
+      const dt=i<fr.length?Math.max(60,((fr[i]?.t-fr[i-1]?.t)||1)*1000/(f.speed||6)):0;
+      setTimeout(step,dt); })();
+  }
+  function startLive(){
+    $('foot').textContent='Connected to live predictor — waiting for telemetry.';
+    const es=new EventSource('/events');
+    es.onopen=()=>{ $('link').textContent='LIVE'; $('dotlive').className='on'; };
+    es.onerror=()=>{ $('link').textContent='RECONNECT'; $('dotlive').className='warn'; };
+    es.onmessage=e=>{ try{ const p=JSON.parse(e.data); if(p.truth) truth=p.truth; ingest(p);}catch(_){}};
+  }
+
+  resize(); loop();
+  if(window.EMBEDDED_FLIGHT) startEmbedded(window.EMBEDDED_FLIGHT); else startLive();
+})();
+</script>
+</body>
+</html>

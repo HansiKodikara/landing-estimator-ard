@@ -1,0 +1,3 @@
+# Generated artifacts (reproduce with scripts/generate_dataset.py + train_model.py)
+dataset.npz
+surrogate.joblib

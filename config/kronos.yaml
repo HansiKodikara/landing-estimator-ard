@@ -1,0 +1,125 @@
+# =============================================================================
+# Project Kronos - Landing Zone Estimator configuration
+#
+# VERIFIED against PreCDR.ork (OpenRocket 24.12) on 2026-09-03.
+# Geometry and recovery values below were read from that file; see
+# docs/CONFIG_PROVENANCE.md for the row-by-row comparison and for the handful
+# of values OpenRocket computes internally and which therefore remain estimates
+# (inertias, drag coefficients, centre of mass) plus the motor internals, which
+# the .ork references from a database rather than storing.
+#
+# All units SI unless stated. Angles in degrees.
+# =============================================================================
+
+launch_site:
+  # CDR: AURC 2026 launch site is White Cliffs, NSW ("remote outback, no mobile
+  # coverage"). The .ork ships with a Florida default (28.61, -80.60); we use
+  # the real competition site so live lat/lon output is meaningful.
+  name: "White Cliffs, NSW"
+  latitude: -30.8506
+  longitude: 143.0847
+  elevation: 100.0        # m ASL (approx pad elevation)
+
+rocket:
+  # Airframe: 156 mm OD air-brake housing, 150 mm ID body (CDR p38).
+  # OpenRocket body radius = 0.078 m.
+  radius: 0.078           # m (body outer radius) -- .ork VERIFIED
+  total_length: 2.40      # m, nose tip to boat-tail -- .ork VERIFIED (unused
+                          # by the 3-DOF sim; recorded so the config is checkable)
+  # Originally back-solved so simulated apogee ~ 11,000 ft (3353 m).
+  # CORROBORATED against the .ork: summing its declared component masses
+  # (payload 3.0 + avionics 2.5 + airbrakes 3.0 + chutes 0.91 + mass
+  # components 0.56 = 9.86 kg) plus airframe structure computed from the
+  # .ork materials and geometry (~4.99 kg) gives ~14.85 kg, before couplers,
+  # rings, bulkheads and hardware. 15.0 kg is consistent. Replace with the
+  # weighed mass once the vehicle is built.
+  dry_mass: 15.0          # kg (everything except motor propellant)
+  # Longitudinal / radial inertia about the CG (rough, tuned for stability).
+  inertia_i: 27.0         # kg*m^2 (pitch/yaw)
+  inertia_z: 0.15         # kg*m^2 (roll)
+  center_of_mass_without_motor: 1.9   # m from nose tip
+  drag_coefficient: 0.5   # power-off Cd (constant approximation)
+  drag_coefficient_power_on: 0.55
+
+motor:
+  # AeroTech M1845NT (CDR p13 / .ork). M-class, total impulse 8308 N*s.
+  designation: "M1845NT"
+  total_impulse: 8308.0   # N*s
+  average_thrust: 1845.0  # N  -> burn_time ~ 4.5 s
+  burn_time: 4.5          # s
+  propellant_mass: 4.2    # kg (Isp ~ 200 s)
+  nozzle_radius: 0.033    # m
+  throat_radius: 0.011    # m
+  grain_number: 5
+  grain_outer_radius: 0.037
+  grain_initial_inner_radius: 0.015
+  grain_initial_height: 0.12
+  grain_separation: 0.005
+  grain_density: 1720.0   # kg/m^3
+
+fins:
+  # .ork VERIFIED: freeform fin set, 4 fins, 5.5 mm airfoil section.
+  # Fin points (x, y) = (0,0) (0.20,0.17) (0.34,0.17) (0.29,0) give:
+  n: 4
+  root_chord: 0.29        # .ork VERIFIED (was 0.30)
+  tip_chord: 0.14         # .ork VERIFIED (was 0.12)
+  span: 0.17              # .ork VERIFIED (was 0.13)
+  sweep_length: 0.20      # .ork VERIFIED (was 0.18)
+  # Fin root leading edge, measured from the nose tip. The airframe is only
+  # 2.40 m long in total, so the previous value of 3.6 m was off the vehicle.
+  position: 1.97          # .ork VERIFIED (was 3.6 - impossible)
+
+nose_cone:
+  # .ork: shape=haack, shapeparameter=0.0 (Haack series with C=0 is the
+  # Von Karman ogive), length 0.35 m, aft radius 0.078 m.
+  length: 0.35            # .ork VERIFIED (was 0.60)
+  kind: "vonKarman"
+
+recovery:
+  # Single-deployment: drogue at apogee, main at altitude (CDR p10, p42).
+  drogue:
+    cd: 1.5               # .ork
+    diameter: 0.60        # m
+    deploy: "apogee"
+  main:
+    cd: 2.5               # .ork
+    diameter: 2.00        # m
+    # RESOLVED: the .ork deploys the main at 457.2 m AGL (1500 ft) on an
+    # "altitude" event. Confirmed directly from PreCDR.ork. If the CDR text
+    # (1200 ft) is the intended figure, change this to 365.76 -- it is worth
+    # ~91 m of extra drift under the main, so confirm with the recovery lead.
+    deploy: "altitude"
+    deploy_altitude_agl: 457.2   # m AGL -- .ork VERIFIED
+  touchdown_speed_limit: 11.0    # m/s (CDR external requirement)
+
+rail:
+  length: 5.5             # m -- .ork VERIFIED (launchrodlength)
+  # .ork launchrodangle = 0.0 deg from vertical, i.e. a vertical rail.
+  # Real AURC pads are usually tilted a few degrees; the Monte-Carlo range
+  # below spans 84-90 so the trained model covers both.
+  inclination: 90.0       # deg from horizontal -- .ork VERIFIED (was 85.0)
+  heading: 90.0           # deg (east) -- .ork VERIFIED (launchroddirection)
+
+environment:
+  # Nominal wind for a single deterministic flight. The Monte-Carlo dataset
+  # generator (scripts/generate_dataset.py) samples around these.
+  wind_speed: 6.0         # m/s
+  wind_heading: 270.0     # deg (FROM west, i.e. blowing toward east)
+
+telemetry:
+  # Onboard downlink (CDR: Telemetry board, 915 MHz LoRa, NEO-M10 GNSS @ 1 Hz).
+  rate_hz: 1.0
+  gps_horizontal_noise_m: 3.0    # NEO-M10S typical CEP
+  gps_vertical_noise_m: 5.0
+  baro_noise_m: 2.0
+  velocity_noise_ms: 1.5
+
+# Monte-Carlo ranges for dataset generation (teacher = RocketPy).
+monte_carlo:
+  n_flights: 60
+  wind_speed_range: [1.0, 12.0]     # m/s
+  wind_heading_range: [0.0, 360.0]  # deg
+  rail_inclination_range: [84.0, 90.0]   # brackets the .ork vertical rail
+  dry_mass_range: [14.0, 16.5]      # kg spread (payload/ballast variation)
+  drag_multiplier_range: [0.9, 1.1]
+  samples_per_flight: 120           # states sampled along each trajectory

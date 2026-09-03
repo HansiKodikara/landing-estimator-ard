@@ -1,0 +1,128 @@
+Kronos Landing-Zone Estimator (LZE)
+===================================
+
+Ready to run. A trained model is included in data/, so you do NOT need to
+generate a dataset or train anything to see it work.
+
+The vehicle config has been VERIFIED against PreCDR.ork - see
+docs/CONFIG_PROVENANCE.md for the row-by-row comparison.
+
+
+1. FASTEST LOOK - no install, no internet
+------------------------------------------------------------------------------
+   Double-click  flight_replay.html
+   A self-contained replay. Watch the landing zone converge ~1.4 km -> ~60 m.
+
+
+2. RUN THE LIVE SERVER
+------------------------------------------------------------------------------
+   pip install -r requirements.txt
+   python scripts/run_live.py --port 8000        # open http://127.0.0.1:8000
+   --speed 2 slows the replay down, --speed 20 speeds it up.
+
+
+3. CONNECT TO THE ARD GROUND-STATION DASHBOARD
+------------------------------------------------------------------------------
+   No changes to the ARD repo needed. LZE consumes ARD telemetry and serves its
+   own screen on a separate port.
+
+   # A) Socket.IO push stream - preferred, sees every frame
+   pip install "python-socketio[client]"
+   python scripts/run_live.py --source ard --ard-url http://127.0.0.1:5000
+
+   # B) ARD's REST API - no websocket, no extra dependencies
+   python scripts/run_live.py --source ard-rest --ard-url http://127.0.0.1:5000
+
+   # C) Replay a captured ARD telemetry log, fully offline
+   python scripts/run_live.py --source ard-file --ard-file capture.jsonl
+
+
+4. PRE-FLIGHT CHECK - run this ON THE PI before driving out
+------------------------------------------------------------------------------
+   python scripts/check_model.py --model data/surrogate.joblib
+   Prints PASS / FAIL, exits 0 or 1.
+
+
+5. TESTS
+------------------------------------------------------------------------------
+   pip install pytest && python -m pytest -q      # 36 tests, ~35 s, offline
+
+
+6. REAL LORA GROUND STATION
+------------------------------------------------------------------------------
+   pip install pyserial
+   python scripts/run_live.py --source serial --serial-port /dev/ttyUSB0 --host 0.0.0.0
+
+
+7. RETRAIN (only if config/kronos.yaml changes)
+------------------------------------------------------------------------------
+   python scripts/generate_dataset.py --n-flights 80 --out data/dataset.npz
+   python scripts/train_model.py --dataset data/dataset.npz --out data/surrogate.joblib
+   python scripts/compare_models.py --dataset data/dataset.npz   # model bake-off
+
+
+READ THESE, IN THIS ORDER, TO UNDERSTAND THE SYSTEM
+------------------------------------------------------------------------------
+   1. README.md                        what it is, how to run it
+   2. docs/REPORT.md                   the written report
+   3. docs/CONFIG_PROVENANCE.md        every vehicle number vs the .ork:
+                                       what was verified, what was corrected,
+                                       what is still an estimate
+   4. config/kronos.yaml               the vehicle itself
+   5. src/lze/sim/fallback.py          the physics, ~100 lines
+   6. src/lze/sim/dataset.py           how training data is made. THE KEY IDEA:
+                                       train on noisy estimator output, not on
+                                       perfect physics ("train like you infer")
+   7. src/lze/model/features.py        the 11 inputs, and why position is
+                                       deliberately excluded
+   8. src/lze/model/train.py           training + the leak-free flight split
+   9. src/lze/estimator/state.py       live state + wind inferred from drift
+  10. src/lze/live/predictor.py        prediction + how the circle is sized
+  11. src/lze/telemetry/ard_adapter.py the ARD bridge
+  12. tests/                           what is actually guaranteed
+
+
+QUESTIONS YOU WILL BE ASKED, AND WHERE THE ANSWER IS
+------------------------------------------------------------------------------
+  "How is it validated?"
+      train.py:_split_by_flight holds out WHOLE FLIGHTS, never individual
+      samples - neighbouring 1 Hz samples would leak and inflate the score.
+      Scored against a "zero drift" baseline. test_prediction_tightens_
+      through_flight pins the core promise: main < drogue < coast.
+
+  "Why 80 flights?"
+      Honestly: a round number, not an optimum - no learning curve was run.
+      What IS defensible: 80 flights -> ~16,700 samples, and held-out error is
+      stable across three different splits. To answer it properly, run
+      generate_dataset.py at 20/40/80/160 and plot error vs flights.
+
+  "Why this model?"
+      scripts/compare_models.py runs the bake-off. Be honest: HistGradient-
+      Boosting is NOT the most accurate. Extra Trees is ~1.9x better under the
+      main chute (38 m vs 71 m); HistGBR wins on size and speed. That is a
+      defensible trade, and having measured it beats "it is the usual choice".
+
+  "Where does the weather come from?"
+      Nowhere - no API, no forecast. The model trains across a wind
+      DISTRIBUTION (1-12 m/s, any direction) and the rocket MEASURES the real
+      wind itself by drifting under the parachute. See estimator/state.py.
+
+
+KNOWN LIMITATIONS (read before presenting)
+------------------------------------------------------------------------------
+* ARD's downlink has NO GPS. Its latitude/longitude are derived from vertical
+  speed, not measured. Until GPS is added to the flight downlink and ARD's
+  parser, the estimator has no real horizontal fix on an actual flight. The
+  bridge now says so loudly rather than showing an empty map.
+* The included model was trained by the built-in 3-DOF fallback simulator, NOT
+  RocketPy (not installed here). check_model.py reports this. Install RocketPy
+  and retrain before flight.
+* Unresolved: the .ork deploys the main at 1500 ft, but the CDR text says
+  1200 ft. Worth ~91 m of drift - confirm with the recovery lead.
+* dry_mass is corroborated (~14.85 kg from .ork components vs 15.0 configured)
+  but not weighed. Replace it when the vehicle is built.
+* Inertias, drag coefficients, centre of mass and the motor internals are still
+  estimates - OpenRocket computes them, the .ork does not store them.
+* Trees cannot extrapolate: the training wind range caps at 12 m/s. In stronger
+  wind the model will UNDER-predict drift. Widen monte_carlo.wind_speed_range
+  if strong wind is plausible.

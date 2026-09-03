@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lze"
+version = "0.1.0"
+description = "Live rocket landing-zone prediction (surrogate of RocketPy) for Project Kronos"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+sim = ["rocketpy>=1.9"]
+serial = ["pyserial>=3.5"]
+ard = ["python-socketio[client]>=5.0"]  # live bridge to the ARD dashboard backend
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
