@@ -54,7 +54,7 @@ held-out flights. Mean landing-point error by phase:
 | final fix    | at touchdown            | **~38 m (median)** |
 
 The recovery area is honestly wide near apogee and tightens by **~20×** under the
-parachutes. Reproduce with `python scripts/evaluate_live.py`.
+parachutes. Reproduce with `python scripts/evaluate.py`.
 
 ---
 
@@ -69,9 +69,9 @@ python scripts/generate_dataset.py --n-flights 80 --out data/dataset.npz
 # 2. Train the surrogate (leak-free, split by whole flight)
 python scripts/train_model.py --dataset data/dataset.npz --out data/surrogate.joblib
 
-# 3a. End-to-end demo -> prints the prediction sharpening + writes a shareable,
-#     self-contained replay dashboard (open in any browser, no server/internet)
-python scripts/demo.py --out flight_replay.html
+# 3a. Measure it end to end -> prints the prediction sharpening + writes a
+#     shareable, self-contained replay dashboard (any browser, no server)
+python scripts/evaluate.py --out flight_replay.html
 
 # 3b. Or run the LIVE dashboard server (replay demo, accelerated real time)
 python scripts/run_live.py --port 8000        # then open http://127.0.0.1:8000
@@ -157,9 +157,9 @@ currently the only source that carries a real measured horizontal position**
 ```bash
 pip install pyserial
 
-# Linux / Raspberry Pi. --fw-capture records every raw line as it arrives.
+# Linux / Raspberry Pi. --record stores the flight; see below.
 python scripts/run_live.py --source featherweight --serial-port /dev/ttyUSB0 \
-    --fw-capture flight.txt --host 0.0.0.0
+    --record flight --host 0.0.0.0
 
 # macOS: the port looks like /dev/cu.usbserial-XXXXXXXX
 python scripts/run_live.py --source featherweight --serial-port /dev/cu.usbserial-DK0JXP7Q
@@ -168,46 +168,60 @@ python scripts/run_live.py --source featherweight --serial-port /dev/cu.usbseria
 python scripts/run_live.py --source featherweight-file --fw-file flight.txt
 ```
 
-**Always pass `--fw-capture` on a real launch.** It happens once; without a log
-there is nothing to re-run the estimator against afterwards.
+### Recording a flight
 
-`lze.telemetry.featherweight` parses the `GPS_STAT` packets the Ground Station
-emits over its micro-USB port (115200 8N1, per Appendix A of the tracker
-manual), converting feet to metres and the compass heading into an ENU velocity
-vector. Velocity is downlinked directly, so nothing has to be reconstructed by
-differencing positions.
+A launch happens once, and **nothing is stored unless you pass `--record`**:
 
-The port interleaves binary frames with ASCII, so the reader syncs on the `@`
-start byte and then reads the line — a bare `readline()` can swallow a real
-packet that lands mid-binary. Because the sync byte is consumed, the `@` is
-**optional** in the parser and the same code handles a live stream and a
-captured log; both are verified to produce byte-identical predictions.
+```bash
+python scripts/run_live.py --source featherweight \
+    --serial-port /dev/ttyUSB0 --record flight
+```
 
-`GPS_STAT` carries no link health, so `RX_NOMTK` / `RX_FOUND` are parsed
-alongside it for RSSI, SNR and tracker battery, and the latest values are
-stamped onto the next position packet. Without that the dashboard reads
-`RSSI 0` all flight, which looks like a dead link. `FS_CHNGE` flight-state
-transitions are recorded but deliberately do **not** drive the flight clock —
-launch detection stays on measured vertical speed.
+That writes two files:
 
-Three classes of packet are refused, each because accepting it would produce a
-confidently wrong answer rather than an obvious failure:
-
-| Refused | Why it matters |
+| File | Contents |
 |---|---|
-| unit type `GS` | that is the *ground station's own* GPS — the map would track the launch table and the "prediction" would look plausible |
-| `Fix` below 3 | a 2-D fix has no trustworthy altitude, and the flight-phase machine keys off altitude |
-| not `CRC_OK` | the ground station has already told you the LoRa packet is corrupt |
+| `flight.jsonl` | one JSON object per packet — when it arrived, what arrived, and the prediction made from it |
+| `flight.txt` | the raw Ground Station lines, each prefixed with its receive time |
 
-The flight clock starts on detected liftoff (sustained climb ≥ 15 m/s,
-`--fw-launch-vu`), not at power-on — otherwise twenty minutes on the pad would
-hand the model a `t` of 1200 s and the phase machine would call the whole flight
-"coast".
+`--record` works with every `--source`. The `.txt` is only written by sources
+that have a raw stream to capture (the Featherweight port today).
 
-**Before flying this source:** there is no barometer on this link, so the
-estimator's baro channel is fed from GPS altitude. Widen
-`telemetry.baro_noise_m` to the tracker's vertical noise and retrain, or the
-estimator trusts an altitude it should not.
+Each `.jsonl` record looks like this — one line, shown expanded:
+
+```json
+{
+  "rx_utc": "2026-09-11T13:23:22.983483+00:00",
+  "rx_mono_s": 0.014,
+  "packet":     { "t": 0.0, "lat": -30.850563, "lon": 143.084701,
+                  "alt_gps": 106.13, "alt_baro_agl": 6.13,
+                  "ve": -0.45, "vn": -0.80, "vu": 0.85,
+                  "packet_id": 1, "rssi": -124.0 },
+  "prediction": { "t": 0.0, "phase": "boost",
+                  "cur_lat": -30.850563, "cur_lon": 143.084701,
+                  "land_lat": -30.852004, "land_lon": 143.082768,
+                  "remaining_time_s": 209.6, "uncertainty_m": 1401.6,
+                  "wind_e": 0.0, "wind_n": 0.0, "downrange_m": 241.6 }
+}
+```
+
+Two receive clocks on purpose: `rx_utc` lines the log up with everything else
+that day, and `rx_mono_s` counts from the start of the run — a wall clock can
+step mid-flight (NTP, someone setting the time) while a monotonic one cannot go
+backwards. The tracker's own GPS time is still there inside the raw line, so
+link latency is a subtraction.
+
+Both files are flushed per line, so a power loss mid-flight still leaves
+everything up to that point. Keeping the raw text next to the decoded log is
+deliberate: if the parser turns out to be wrong about the real hardware, the
+raw file can be re-parsed and the `.jsonl` cannot.
+
+Read it back with anything — one JSON object per line:
+
+```python
+import json
+records = [json.loads(l) for l in open("flight.jsonl")]
+```
 
 ### Optional launch-day wind forecast
 
@@ -277,7 +291,7 @@ src/lze/
   telemetry/                Packet schema, replay stream, serial/UDP sources
   live/                     Predictor, SSE server, baked replay-page generator
 dashboard/index.html        Offline live landing-zone dashboard
-scripts/                    generate_dataset · train_model · evaluate_live · demo · run_live
+scripts/                    generate_dataset · train_model · evaluate · check_model · run_live
 tests/                      pytest suite (runs on the fallback engine, no GPU/net)
 data/                       Committed dataset + trained surrogate
 ```
