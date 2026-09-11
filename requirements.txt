@@ -9,3 +9,8 @@ joblib>=1.3
 # Optional: if RocketPy is not installed, the data generator automatically
 # falls back to the built-in 3-DOF physics simulator (src/lze/sim/fallback.py).
 rocketpy>=1.9 ; python_version >= "3.9"
+
+# Reading a real ground station over USB serial: --source featherweight and
+# --source serial. Needed for any run against hardware; the replay and ARD
+# sources work without it.
+pyserial>=3.5

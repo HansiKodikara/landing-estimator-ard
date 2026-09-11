@@ -293,14 +293,50 @@ class FeatherweightDecoder:
 
 
 class _FwReporter:
-    """Counts rejected lines and shouts once a pattern emerges."""
+    """Counts what the port is doing and says so periodically.
 
-    def __init__(self, announce_after: int = 8):
+    Silence is the one thing a live reader must never do. Without a heartbeat,
+    a wrong port, a wrong baud, a tracker that is not transmitting and a
+    perfectly healthy link waiting for liftoff all look exactly the same on
+    screen: nothing. The counters below turn that into a diagnosis.
+    """
+
+    def __init__(self, announce_after: int = 8, heartbeat_s: float = 5.0):
         self.announce_after = announce_after
+        self.heartbeat_s = heartbeat_s
         self.accepted = 0
         self.rejected = 0
+        self.lines = 0
+        self.last_reason = ""
         self._streak = 0
         self._announced = False
+        self._t0 = time.monotonic()
+        self._next_beat = self._t0 + heartbeat_s
+
+    def saw_line(self) -> None:
+        self.lines += 1
+
+    def heartbeat(self, decoder: "FeatherweightDecoder") -> None:
+        """Print a one-line status if it is time. Cheap enough to call per line."""
+        now = time.monotonic()
+        if now < self._next_beat:
+            return
+        self._next_beat = now + self.heartbeat_s
+        age = now - self._t0
+        if self.accepted:
+            extra = (f"fix ok, {decoder.sats} sats"
+                     f"{f', RSSI {decoder.rssi:.0f} dBm' if decoder.rssi else ''}"
+                     f"{'' if decoder.launched else ', waiting for liftoff'}")
+        elif self.rejected:
+            extra = f"NONE USABLE -- last reason: {self.last_reason}"
+        elif self.lines:
+            extra = ("no GPS_STAT packets in that traffic -- wrong baud, or the "
+                     "tracker is not transmitting")
+        else:
+            extra = ("NOTHING ON THE PORT -- wrong port, cable, or the ground "
+                     "station is off")
+        print(f"[featherweight] {age:4.0f}s  lines {self.lines:<6} "
+              f"packets {self.accepted:<6} rejected {self.rejected:<5} {extra}")
 
     def ok(self) -> None:
         self.accepted += 1
@@ -309,6 +345,7 @@ class _FwReporter:
 
     def bad(self, reason: str) -> None:
         self.rejected += 1
+        self.last_reason = reason
         self._streak += 1
         if self._streak == self.announce_after and not self._announced:
             self._announced = True
@@ -404,9 +441,12 @@ class FeatherweightSource(TelemetrySource):
                       f"waiting for launch (t stays 0 until liftoff is detected)")
                 if cap is not None:
                     print(f"[featherweight] capturing raw lines to {self.capture_path}")
+                first = True
                 for line in iter_serial_lines(ser):
+                    report.heartbeat(self.decoder)
                     if not line:
                         continue
+                    report.saw_line()
                     if cap is not None:
                         cap.write(stamp_line(line, t_mono0) + "\n")
                         cap.flush()
@@ -418,6 +458,11 @@ class FeatherweightSource(TelemetrySource):
                     if pkt is None:
                         continue       # link health, flight state, other traffic
                     report.ok()
+                    if first:
+                        first = False
+                        print(f"[featherweight] RECEIVING: first fix at "
+                              f"{pkt.lat:.5f}, {pkt.lon:.5f}, "
+                              f"{pkt.alt_gps:.0f} m ASL, {self.decoder.sats} sats")
                     if self.decoder.launched and not announced_launch:
                         announced_launch = True
                         print("[featherweight] liftoff detected -- flight clock started")

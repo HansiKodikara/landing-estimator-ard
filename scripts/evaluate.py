@@ -48,7 +48,7 @@ def main() -> None:
     cfg = load_config(args.config)
     lat, lon, elev = cfg.site_origin
     origin = Origin(lat, lon, elev)
-    sur = Surrogate.load(args.model)
+    sur = _bootstrap.load_model(args.model)
 
     # ---------- 1. provenance ----------
     print(f"\n{RULE}\n  KRONOS LANDING-ZONE ESTIMATOR -- evaluation\n{RULE}")

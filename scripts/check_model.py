@@ -45,8 +45,14 @@ def main() -> int:
     print(f"Model file : {args.model}")
     path = Path(args.model)
     if not path.exists():
-        print(f"{BAD} file not found. Copy it from the machine that ran "
-              f"scripts/train_model.py -- it is deliberately not in git.")
+        print(f"{BAD} file not found -- it is deliberately not in git "
+              f"(a regenerable binary).")
+        print(f"      Copy data/surrogate.joblib from the release zip, or "
+              f"build one:")
+        print(f"        python scripts/generate_dataset.py --n-flights 80 "
+              f"--out data/dataset.npz")
+        print(f"        python scripts/train_model.py --dataset "
+              f"data/dataset.npz --out {args.model}")
         return 1
     print(f"{OK} found ({path.stat().st_size / 1e6:.1f} MB)")
 

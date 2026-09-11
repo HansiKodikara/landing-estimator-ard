@@ -53,7 +53,12 @@ from lze.telemetry.featherweight import (
     FeatherweightSource,
 )
 from lze.telemetry.replay import trajectory_to_packets
-from lze.telemetry.source import ReplaySource, SerialLoRaSource
+from lze.telemetry.source import ReplaySource, SerialLoRaSource, anchor_origin
+
+
+#: Fixes medianed into the map origin. Ten seconds at 1 Hz -- long enough for
+#: GPS noise to average down, short enough not to be a wait on the pad.
+ORIGIN_FIXES = 10
 
 
 def check_writable(path: str) -> None:
@@ -107,6 +112,12 @@ def main() -> None:
     ap.add_argument("--fw-file", default=None,
                     help="Captured Ground Station serial text log "
                          "(--source featherweight-file)")
+    ap.add_argument("--origin-here", nargs="+", default=None, metavar="LAT LON ELEV",
+                    help="Pin the map origin to this point instead of taking it "
+                         "from the first GPS fixes, e.g. --origin-here -33.8688 "
+                         "151.2093 40. Rarely needed: the tracker's own first "
+                         "fix is the pad, and is measured by the receiver that "
+                         "will measure the flight.")
     ap.add_argument("--fw-launch-vu", type=float, default=15.0,
                     help="Upward speed [m/s] that starts the flight clock "
                          "(--source featherweight)")
@@ -134,8 +145,19 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    sur = Surrogate.load(args.model)
+    sur = _bootstrap.load_model(args.model)
     lat, lon, elev = cfg.site_origin
+    if args.origin_here:
+        # Same argparse trap as a recovery coordinate: a bare "-33.86" is read
+        # as a flag unless it arrives as its own token, so take them separately.
+        try:
+            parts = " ".join(args.origin_here).replace(",", " ").split()
+            lat, lon, elev = (float(x) for x in parts)
+        except ValueError:
+            ap.error("--origin-here needs LAT LON ELEV "
+                     f"(got {' '.join(args.origin_here)!r})")
+        print(f"Pad overridden to {lat:.5f}, {lon:.5f} at {elev:.0f} m "
+              f"(config says {cfg.launch_site['name']})")
     origin = Origin(lat, lon, elev)
 
     wind_seed = None
@@ -208,6 +230,26 @@ def main() -> None:
 
     if log_path:
         print(f"Recording every packet and prediction to {log_path}")
+    if args.source != "replay" and not args.origin_here:
+        print(f"Taking the map origin from up to {ORIGIN_FIXES} stationary "
+              f"fixes (nothing to configure) ...")
+        source, measured = anchor_origin(source, n=ORIGIN_FIXES)
+        if measured is None:
+            # Either no fix ever arrived, or the feed began already in motion.
+            # Neither is worth guessing about, and the configured pad is a real
+            # answer -- just not a measured one, so say which you are getting.
+            print(f"\n  NOTE: no stationary fix to anchor on -- either nothing "
+                  f"arrived, or\n  the tracker was already moving when this "
+                  f"started. Falling back to the\n  configured pad "
+                  f"({cfg.launch_site['name']}: {lat:.4f}, {lon:.4f}, "
+                  f"{elev:.0f} m).\n  If that is not where you are, stop and "
+                  f"pass --origin-here LAT LON ELEV.\n")
+        else:
+            origin = measured
+            print(f"Origin set to {origin.lat:.6f}, {origin.lon:.6f} at "
+                  f"{origin.elevation:.0f} m  <- measured, not configured")
+            predictor = LandingPredictor(cfg, sur, origin, wind_seed=wind_seed)
+
     server = LiveServer(predictor, source, host=args.host, port=args.port,
                         truth=truth, log_path=log_path)
     server.serve_forever()
