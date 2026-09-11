@@ -146,6 +146,69 @@ awkward (CORS, a proxy, or not wanting `python-socketio` on the Pi).
 `TelemetryPacket` schema (reconstructing the ENU velocity vector from successive
 fixes). See `docs/REPORT.md` §3.
 
+### Straight off a Featherweight Ground Station v2
+
+The landing estimator only needs GPS, and the Featherweight tracker already
+downlinks it — so the Ground Station v2 can drive the recovery map on its own,
+with no flight-computer downlink and no ARD backend in the path. **This is
+currently the only source that carries a real measured horizontal position**
+(ARD's downlink does not — see Limitations).
+
+```bash
+pip install pyserial
+
+# Linux / Raspberry Pi. --fw-capture records every raw line as it arrives.
+python scripts/run_live.py --source featherweight --serial-port /dev/ttyUSB0 \
+    --fw-capture flight.txt --host 0.0.0.0
+
+# macOS: the port looks like /dev/cu.usbserial-XXXXXXXX
+python scripts/run_live.py --source featherweight --serial-port /dev/cu.usbserial-DK0JXP7Q
+
+# replay that capture, or any Ground Station log, fully offline
+python scripts/run_live.py --source featherweight-file --fw-file flight.txt
+```
+
+**Always pass `--fw-capture` on a real launch.** It happens once; without a log
+there is nothing to re-run the estimator against afterwards.
+
+`lze.telemetry.featherweight` parses the `GPS_STAT` packets the Ground Station
+emits over its micro-USB port (115200 8N1, per Appendix A of the tracker
+manual), converting feet to metres and the compass heading into an ENU velocity
+vector. Velocity is downlinked directly, so nothing has to be reconstructed by
+differencing positions.
+
+The port interleaves binary frames with ASCII, so the reader syncs on the `@`
+start byte and then reads the line — a bare `readline()` can swallow a real
+packet that lands mid-binary. Because the sync byte is consumed, the `@` is
+**optional** in the parser and the same code handles a live stream and a
+captured log; both are verified to produce byte-identical predictions.
+
+`GPS_STAT` carries no link health, so `RX_NOMTK` / `RX_FOUND` are parsed
+alongside it for RSSI, SNR and tracker battery, and the latest values are
+stamped onto the next position packet. Without that the dashboard reads
+`RSSI 0` all flight, which looks like a dead link. `FS_CHNGE` flight-state
+transitions are recorded but deliberately do **not** drive the flight clock —
+launch detection stays on measured vertical speed.
+
+Three classes of packet are refused, each because accepting it would produce a
+confidently wrong answer rather than an obvious failure:
+
+| Refused | Why it matters |
+|---|---|
+| unit type `GS` | that is the *ground station's own* GPS — the map would track the launch table and the "prediction" would look plausible |
+| `Fix` below 3 | a 2-D fix has no trustworthy altitude, and the flight-phase machine keys off altitude |
+| not `CRC_OK` | the ground station has already told you the LoRa packet is corrupt |
+
+The flight clock starts on detected liftoff (sustained climb ≥ 15 m/s,
+`--fw-launch-vu`), not at power-on — otherwise twenty minutes on the pad would
+hand the model a `t` of 1200 s and the phase machine would call the whole flight
+"coast".
+
+**Before flying this source:** there is no barometer on this link, so the
+estimator's baro channel is fed from GPS altitude. Widen
+`telemetry.baro_noise_m` to the tracker's vertical noise and retrain, or the
+estimator trusts an altitude it should not.
+
 ### Optional launch-day wind forecast
 
 By design the model is **any-weather**: it trains over a wind distribution and

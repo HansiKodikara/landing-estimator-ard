@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the live landing-zone dashboard server.
 
-Two telemetry sources:
+Telemetry sources:
 
 * ``--source replay`` (default): simulate a flight and stream it in accelerated
   real time -- great for demos on any machine.
@@ -14,10 +14,16 @@ Two telemetry sources:
   (``/telemetry/history`` then polling ``/telemetry/latest``) -- no websocket
   and no extra dependencies.
 * ``--source ard-file``: replay a captured ARD ``.jsonl`` telemetry log offline.
+* ``--source featherweight``: read a Featherweight Ground Station v2 directly
+  over USB serial. This link carries a real GPS fix, which the ARD downlink
+  does not, so it is the only source that can anchor the prediction to a
+  measured horizontal position on a real flight.
+* ``--source featherweight-file``: replay a captured Ground Station text log.
 
     python scripts/run_live.py --port 8000                        # replay demo
     python scripts/run_live.py --source serial --serial-port /dev/ttyUSB0
     python scripts/run_live.py --source ard --ard-url http://127.0.0.1:5000
+    python scripts/run_live.py --source featherweight --serial-port /dev/ttyUSB0
 """
 from __future__ import annotations
 
@@ -38,6 +44,10 @@ from lze.telemetry.ard_adapter import (
     ArdSocketIOSource,
     ard_envelopes_from_jsonl,
 )
+from lze.telemetry.featherweight import (
+    FeatherweightReplaySource,
+    FeatherweightSource,
+)
 from lze.telemetry.replay import trajectory_to_packets
 from lze.telemetry.source import ReplaySource, SerialLoRaSource
 
@@ -48,10 +58,24 @@ def main() -> None:
     ap.add_argument("--model", default="data/surrogate.joblib")
     ap.add_argument(
         "--source",
-        choices=["replay", "serial", "ard", "ard-rest", "ard-file"],
+        choices=["replay", "serial", "ard", "ard-rest", "ard-file",
+                 "featherweight", "featherweight-file"],
         default="replay",
     )
     ap.add_argument("--serial-port", default="/dev/ttyUSB0")
+    ap.add_argument("--serial-baud", type=int, default=115200,
+                    help="Serial baud rate (Featherweight Ground Station v2 "
+                         "is 115200 8N1 per the tracker manual)")
+    ap.add_argument("--fw-file", default=None,
+                    help="Captured Ground Station serial text log "
+                         "(--source featherweight-file)")
+    ap.add_argument("--fw-launch-vu", type=float, default=15.0,
+                    help="Upward speed [m/s] that starts the flight clock "
+                         "(--source featherweight)")
+    ap.add_argument("--fw-capture", default=None,
+                    help="Write every raw Ground Station line to this file "
+                         "while running live. A launch happens once -- without "
+                         "a capture there is nothing to replay afterwards.")
     ap.add_argument("--ard-url", default="http://127.0.0.1:5000",
                     help="ARD dashboard backend URL (--source ard / ard-rest)")
     ap.add_argument("--ard-poll-hz", type=float, default=4.0,
@@ -111,12 +135,27 @@ def main() -> None:
             print(f"WARNING: no response from {args.ard_url}/health -- is the "
                   f"ARD backend running? Will keep retrying.")
         print(f"Polling ARD REST API at {args.ard_url} ({args.ard_poll_hz:g} Hz)")
-    else:  # ard-file
+    elif args.source == "ard-file":
         if not args.ard_file:
             ap.error("--source ard-file requires --ard-file <capture.jsonl>")
         envelopes = ard_envelopes_from_jsonl(args.ard_file)
         source = ArdReplaySource(envelopes, origin)
         print(f"Replaying {len(envelopes)} ARD telemetry frames from {args.ard_file}")
+    elif args.source == "featherweight":
+        source = FeatherweightSource(
+            port=args.serial_port, baud=args.serial_baud, origin=origin,
+            capture_path=args.fw_capture,
+            launch_detect_vu_ms=args.fw_launch_vu,
+        )
+        print(f"Reading Featherweight Ground Station v2 on {args.serial_port} "
+              f"at {args.serial_baud} baud")
+    else:  # featherweight-file
+        if not args.fw_file:
+            ap.error("--source featherweight-file requires --fw-file <capture.txt>")
+        source = FeatherweightReplaySource.from_file(
+            args.fw_file, origin, launch_detect_vu_ms=args.fw_launch_vu,
+        )
+        print(f"Replaying Featherweight serial log {args.fw_file}")
 
     server = LiveServer(predictor, source, host=args.host, port=args.port, truth=truth)
     server.serve_forever()
