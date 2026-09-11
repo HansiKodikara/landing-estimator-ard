@@ -53,6 +53,8 @@ from __future__ import annotations
 
 import math
 import re
+import time
+from datetime import datetime, timezone
 from typing import Iterable, Iterator, List, Optional
 
 from ..geo import Origin
@@ -319,6 +321,25 @@ def iter_serial_lines(ser, sync: bytes = b"@") -> Iterator[str]:
         yield ser.readline().decode("ascii", errors="ignore").strip()
 
 
+def stamp_line(line: str, t_mono0: float) -> str:
+    """Prefix a raw line with when the ground station received it.
+
+    The packet already carries the *tracker's* GPS time. What it cannot tell
+    you is when the line arrived here, so link latency is unmeasurable and a
+    dropout is indistinguishable from a slow packet. Two clocks are recorded:
+    the wall clock, so the log lines up with everything else that day, and a
+    monotonic one, because a wall clock can step mid-flight (NTP, someone
+    setting the time) while a monotonic clock cannot run backwards.
+
+    The prefix is deliberately harmless to the parsers: they anchor on
+    ``GPS_STAT`` / ``RX_`` with :func:`re.search`, so a stamped capture replays
+    exactly like an unstamped one -- pinned by
+    ``test_stamped_capture_parses_identically``.
+    """
+    utc = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return f"{utc} {time.monotonic() - t_mono0:.3f} {line}"
+
+
 class FeatherweightSource(TelemetrySource):
     """Read live tracker telemetry from a Ground Station v2 over USB serial.
 
@@ -362,6 +383,7 @@ class FeatherweightSource(TelemetrySource):
         # port and every line is flushed as it arrives -- a power loss then
         # still leaves a usable file rather than an empty buffer.
         cap = open(self.capture_path, "w") if self.capture_path else None
+        t_mono0 = time.monotonic()
         try:
             with serial.Serial(self.port, self.baud, timeout=1) as ser:
                 print(f"[featherweight] listening on {self.port} at {self.baud} baud; "
@@ -372,7 +394,7 @@ class FeatherweightSource(TelemetrySource):
                     if not line:
                         continue
                     if cap is not None:
-                        cap.write(line + "\n")
+                        cap.write(stamp_line(line, t_mono0) + "\n")
                         cap.flush()
                     try:
                         pkt = self.decoder.feed(line)
@@ -394,8 +416,8 @@ class FeatherweightSource(TelemetrySource):
 class FeatherweightReplaySource(TelemetrySource):
     """Replay a captured Ground Station text log. No hardware, no network.
 
-    Capture one alongside a live run with ``--fw-capture``, or with any
-    terminal program that can log to a file.
+    Capture one alongside a live run with ``--record NAME`` (it writes
+    ``NAME.txt``), or with any terminal program that can log to a file.
     """
 
     def __init__(self, lines: List[str], origin: Origin, **decoder_kwargs):
