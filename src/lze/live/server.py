@@ -12,7 +12,10 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from collections import deque
+from dataclasses import asdict
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -112,22 +115,69 @@ class LiveServer:
         host: str = "127.0.0.1",
         port: int = 8000,
         truth: Optional[dict] = None,
+        log_path: Optional[str] = None,
     ):
         self.predictor = predictor
         self.source = source
         self.host = host
         self.port = port
         self.truth = truth
+        # Where to persist predictions. Without this the only record of a
+        # flight is _Hub's in-memory ring buffer, which dies with the process:
+        # a launch happens once, and afterwards there would be nothing to show
+        # how the estimate converged or how it did against the real landing.
+        self.log_path = log_path
+        # Opened NOW, not inside the worker thread. Opening it there meant a bad
+        # path (a typo, an unmounted USB stick) killed the thread while the
+        # dashboard carried on serving HTTP 200 -- a screen that looks perfectly
+        # healthy and is recording nothing. Failing here happens before the port
+        # is even bound, while someone is still looking at the terminal.
+        #
+        # Opened in the telemetry-agnostic server rather than in a source, so
+        # every source is recorded: featherweight, ard, serial, replay.
+        self._log = open(log_path, "w") if log_path else None
         self.hub = _Hub()
         self._httpd: Optional[ThreadingHTTPServer] = None
 
     def _worker(self) -> None:
-        for pkt in self.source:
-            pred: LivePrediction = self.predictor.process(pkt)
-            record = pred.to_dict()
-            if self.truth is not None:
-                record["truth"] = self.truth
-            self.hub.publish(json.dumps(record))
+        log = self._log
+        t_mono0 = time.monotonic()
+        try:
+            for pkt in self.source:
+                pred: LivePrediction = self.predictor.process(pkt)
+                record = pred.to_dict()
+                if self.truth is not None:
+                    record["truth"] = self.truth
+                self.hub.publish(json.dumps(record))
+                if log is not None:
+                    # Both the input and the output for this packet, so the log
+                    # stands alone: a prediction can be re-derived and checked
+                    # without the original capture. Flushed per line so a power
+                    # loss mid-flight still leaves everything up to that point.
+                    log.write(json.dumps({
+                        "rx_utc": datetime.now(timezone.utc).isoformat(
+                            timespec="microseconds"),
+                        "rx_mono_s": round(time.monotonic() - t_mono0, 3),
+                        "packet": asdict(pkt),
+                        "prediction": record,
+                    }) + "\n")
+                    log.flush()
+        except Exception as exc:
+            # A daemon thread dying takes the telemetry with it while the HTTP
+            # server keeps answering, so the failure has to announce itself --
+            # otherwise the operator sees a normal dashboard that has quietly
+            # stopped predicting.
+            import traceback
+            print(f"\n{'!' * 70}\n"
+                  f"  TELEMETRY STOPPED: {type(exc).__name__}: {exc}\n"
+                  f"  No further predictions will be made"
+                  f"{' and nothing more will be recorded' if log else ''}.\n"
+                  f"{'!' * 70}\n")
+            traceback.print_exc()
+        finally:
+            if log is not None:
+                log.close()
+                print(f"[record] closed {self.log_path}")
 
     def serve_forever(self) -> None:
         handler = _make_handler(self.hub)
@@ -142,3 +192,5 @@ class LiveServer:
             pass
         finally:
             self._httpd.shutdown()
+            if self._log is not None and not self._log.closed:
+                self._log.close()

@@ -24,10 +24,14 @@ Telemetry sources:
     python scripts/run_live.py --source serial --serial-port /dev/ttyUSB0
     python scripts/run_live.py --source ard --ard-url http://127.0.0.1:5000
     python scripts/run_live.py --source featherweight --serial-port /dev/ttyUSB0
+
+Pass ``--record NAME`` on a real launch. Nothing is stored without it.
 """
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 
 import _bootstrap  # noqa: F401
 import numpy as np
@@ -52,6 +56,40 @@ from lze.telemetry.replay import trajectory_to_packets
 from lze.telemetry.source import ReplaySource, SerialLoRaSource
 
 
+def check_writable(path: str) -> None:
+    """Refuse to start if a recording path cannot be written.
+
+    Checked before the model loads and before the port is bound, because the
+    alternative is discovering it from a dead worker thread once the rocket is
+    already on the rail.
+
+    The directory is deliberately NOT created. "--record /mnt/usb/flight" with
+    the stick unmounted should stop, not quietly fill the root filesystem and
+    leave someone believing the flight is on the USB.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    if not os.path.isdir(parent):
+        sys.exit(f"--record: directory does not exist: {parent}\n"
+                 f"  Create it first, or pick a path that exists. "
+                 f"Refusing to start rather than record nothing.")
+    if not os.access(parent, os.W_OK):
+        sys.exit(f"--record: directory is not writable: {parent}")
+    # Probe by actually opening it -- os.access can be wrong about read-only
+    # mounts. Tidy up afterwards: leaving an empty file behind would look like a
+    # recording that captured nothing, which is the opposite of reassuring.
+    existed = os.path.exists(path)
+    try:
+        with open(path, "a"):
+            pass
+    except OSError as exc:
+        sys.exit(f"--record: cannot write {path}: {exc}")
+    if not existed:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=None)
@@ -72,16 +110,18 @@ def main() -> None:
     ap.add_argument("--fw-launch-vu", type=float, default=15.0,
                     help="Upward speed [m/s] that starts the flight clock "
                          "(--source featherweight)")
-    ap.add_argument("--fw-capture", default=None,
-                    help="Write every raw Ground Station line to this file "
-                         "while running live. A launch happens once -- without "
-                         "a capture there is nothing to replay afterwards.")
     ap.add_argument("--ard-url", default="http://127.0.0.1:5000",
                     help="ARD dashboard backend URL (--source ard / ard-rest)")
     ap.add_argument("--ard-poll-hz", type=float, default=4.0,
                     help="Polling rate for --source ard-rest")
     ap.add_argument("--ard-file", default=None,
                     help="Captured ARD telemetry .jsonl to replay (--source ard-file)")
+    ap.add_argument("--record", default=None, metavar="NAME",
+                    help="Record the flight to NAME.jsonl (one record per "
+                         "packet: receive time, the packet, the prediction for "
+                         "it) and, for sources with raw lines, NAME.txt (the "
+                         "raw stream with receive times). A launch happens "
+                         "once; nothing is recorded unless you pass this.")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--speed", type=float, default=8.0, help="replay speed multiplier")
@@ -107,6 +147,15 @@ def main() -> None:
               f"-> ENU ({wind_seed[0]:.1f}, {wind_seed[1]:.1f})")
 
     predictor = LandingPredictor(cfg, sur, origin, wind_seed=wind_seed)
+
+    # One argument, two artifacts. The raw text is the redundancy worth having:
+    # if the parser turns out to be wrong about the real hardware, that file can
+    # be re-parsed and the decoded .jsonl cannot.
+    log_path = f"{args.record}.jsonl" if args.record else None
+    raw_path = f"{args.record}.txt" if args.record else None
+    for path in (log_path, raw_path):
+        if path:
+            check_writable(path)
 
     truth = None
     if args.source == "replay":
@@ -144,7 +193,7 @@ def main() -> None:
     elif args.source == "featherweight":
         source = FeatherweightSource(
             port=args.serial_port, baud=args.serial_baud, origin=origin,
-            capture_path=args.fw_capture,
+            capture_path=raw_path,
             launch_detect_vu_ms=args.fw_launch_vu,
         )
         print(f"Reading Featherweight Ground Station v2 on {args.serial_port} "
@@ -157,7 +206,10 @@ def main() -> None:
         )
         print(f"Replaying Featherweight serial log {args.fw_file}")
 
-    server = LiveServer(predictor, source, host=args.host, port=args.port, truth=truth)
+    if log_path:
+        print(f"Recording every packet and prediction to {log_path}")
+    server = LiveServer(predictor, source, host=args.host, port=args.port,
+                        truth=truth, log_path=log_path)
     server.serve_forever()
 
 

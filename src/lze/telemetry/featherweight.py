@@ -36,6 +36,20 @@ wrong answer:
 Velocity arrives directly here, so -- unlike the ARD bridge -- nothing has to
 be reconstructed by differencing successive positions.
 
+There is no barometer on this link, and measurement says that is fine. The
+state estimator fuses altitude as ``0.7 x baro + 0.3 x GPS``; fed from here
+both slots hold the same GPS number, so nothing averages out and the fused
+altitude carries the full GPS vertical noise -- 5.0 m against the 2.05 m the
+model trained on (``gps_vertical_noise_m`` and ``baro_noise_m`` in the config),
+2.4x noisier. Over 60 paired flights -- the same flight run twice, differing
+only in this channel -- that costs **+5.1 m of final landing error, SE 2.9 m,
+95% CI [-0.5, +10.7] m: not distinguishable from zero** against a ~50 m final
+error. It lands softly for two reasons: at 3 km altitude 5 m is 0.17% of the
+value and the trees split on altitude far more coarsely than that; and ``vu``
+is downlinked directly rather than differenced from altitude, so descent rate
+-- what actually drives the drift prediction -- never touches the noisy
+channel. No retrain is needed before flying this source.
+
 ``GPS_STAT`` carries no link health, so ``RX_NOMTK`` / ``RX_FOUND`` are parsed
 alongside it for RSSI, SNR and tracker battery, and the most recent values are
 stamped onto the next position packet. Without this the dashboard shows
@@ -266,9 +280,9 @@ class FeatherweightDecoder:
             lat=f["lat"],
             lon=f["lon"],
             alt_gps=f["alt_asl_m"],
-            # No barometer on this link: the estimator's baro channel is fed
-            # from GPS altitude too (see the module docstring -- widen
-            # telemetry.baro_noise_m and retrain before flying this source).
+            # No barometer on this link, so the estimator's baro channel is
+            # fed GPS altitude too. Measured cost: +5.1 m of final error,
+            # SE 2.9 m -- not distinguishable from zero. See the docstring.
             alt_baro_agl=max(0.0, alt_agl),
             ve=f["ve"],
             vn=f["vn"],
